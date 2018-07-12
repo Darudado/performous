@@ -3,6 +3,7 @@
 #include "chrono.hh"
 #include "config.hh"
 #include "controllers.hh"
+#include "fbo.hh"
 #include "fs.hh"
 #include "glmath.hh"
 #include "image.hh"
@@ -12,8 +13,8 @@
 #include <boost/filesystem.hpp>
 
 namespace {
-	float s_width;
-	float s_height;
+	unsigned s_width;
+	unsigned s_height;
 	/// Attempt to set attribute and report errors.
 	/// Tests for success when destoryed.
 	struct GLattrSetter {
@@ -40,16 +41,13 @@ namespace {
 	const float far_ = 110.0f; // How far away can things be seen
 	const float z0 = 1.5f; // This determines FOV: the value is your distance from the monitor (the unit being the width of the Performous window)
 
-	glmath::mat4 g_color = glmath::mat4(1.0f);
-	glmath::mat4 g_projection = glmath::mat4(1.0f);
-	glmath::mat4 g_modelview = glmath::mat4(1.0f);
+	glmath::mat4 g_color = glmath::mat4();
+	glmath::mat4 g_projection = glmath::mat4();
+	glmath::mat4 g_modelview = glmath::mat4();
 }
 
-float screenW() { return s_width; }
-float screenH() { return s_height; }
-
-GLuint Window::m_vao = 0;
-GLuint Window::m_vbo = 0;
+unsigned int screenW() { return s_width; }
+unsigned int screenH() { return s_height; }
 
 Window::Window() {
 	std::atexit(SDL_Quit);
@@ -74,10 +72,6 @@ Window::Window() {
 		screen = SDL_CreateWindow(PACKAGE " " VERSION, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, flags);
 		if (!screen) throw std::runtime_error(std::string("SDL_SetVideoMode failed: ") + SDL_GetError());
 		SDL_GL_CreateContext(screen);
-		glutil::GLErrorChecker error("Initializing buffers");
-		{
-			initBuffers();
-		}
 	}
 	SDL_SetWindowMinimumSize(screen, 400, 250);
 	SDL_GetWindowPosition(screen, &m_windowX, &m_windowY);
@@ -90,27 +84,18 @@ Window::Window() {
 	std::clog << "video/info: GL_RENDERER:   " << glGetString(GL_RENDERER) << std::endl;
 	// Extensions would need more complex outputting, otherwise they will break clog.
 	//std::clog << "video/info: GL_EXTENSIONS: " << glGetString(GL_EXTENSIONS) << std::endl;
-	if (epoxy_gl_version() < 33) throw std::runtime_error("OpenGL 3.3 is required but not available");
-	if (config["graphic/fullscreen"].b()) { m_needResize = m_needReload = true; }
-	createShaders();
-}
 
-void Window::createShaders() {
+	if (epoxy_gl_version() < 33) throw std::runtime_error("OpenGL 3.3 is required but not available");
+
 	// The Stereo3D shader needs OpenGL 3.3 and GL_ARB_viewport_array, some Intel drivers support GL 3.3,
 	// but not GL_ARB_viewport_array, so we just check for the extension here.
-	if (config["graphic/stereo3d"].b()) {
-		if (epoxy_has_gl_extension("GL_ARB_viewport_array")) {
+	if (epoxy_has_gl_extension("GL_ARB_viewport_array")) {
 		// Compile geometry shaders when stereo is requested
 		shader("color").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("surface").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("texture").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("3dobject").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("dancenote").compileFile(findFile("shaders/stereo3d.geom"));
-		}
-		else { 
-		std::clog << "video/warning: Stereo3D was enabled but the 'GL_ARB_viewport_array' extension is unsupported; will now disable Stereo3D." << std::endl;
-		config["graphic/stereo3d"].b() = false;
-		}
 	}
 
 	shader("color")
@@ -140,33 +125,12 @@ void Window::createShaders() {
 	  .compileFile(findFile("shaders/dancenote.vert"))
 	  .compileFile(findFile("shaders/core.frag"))
 	  .link();
+
 	updateColor();
 	view(0);  // For loading screens
 }
 
-void Window::initBuffers() {
-	glGenVertexArrays(1, &Window::m_vao);
-	glBindVertexArray(Window::m_vao);
-	glGenBuffers(1, &Window::m_vbo);
-	GLsizei stride = glutil::VertexArray::stride();
-
-	glBindBuffer(GL_ARRAY_BUFFER, Window::m_vbo);			
-	glEnableVertexAttribArray(vertPos);
-	glVertexAttribPointer(vertPos, 3, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(glutil::VertexInfo, vertPos));
-	glEnableVertexAttribArray(vertTexCoord);
-	glVertexAttribPointer(vertTexCoord, 2, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(glutil::VertexInfo, vertTexCoord));
-	glEnableVertexAttribArray(vertNormal);
-	glVertexAttribPointer(vertNormal, 3, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(glutil::VertexInfo, vertNormal));
-	glEnableVertexAttribArray(vertColor);
-	glVertexAttribPointer(vertColor, 4, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(glutil::VertexInfo, vertColor));
-}
-
-Window::~Window() {
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	glBindVertexArray(0);
-	glDeleteVertexArrays(1, &m_vao);
-	glDeleteBuffers(1, &m_vbo);
-}
+Window::~Window() { }
 
 void Window::blank() {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -230,22 +194,24 @@ void Window::render(std::function<void (void)> drawFunc) {
 	// Can we do direct to framebuffer rendering (no FBO)?
 	if (!stereo || type == 2) { view(stereo); drawFunc(); return; }
 	// Render both eyes to FBO (full resolution top/bottom for anaglyph)
-	
+	unsigned w = s_width;
+	unsigned h = 2 * s_height;
+	FBO fbo(w, h);
 	glerror.check("FBO");
 	{
-		UseFBO user(getFBO());
+		UseFBO user(fbo);
 		blank();
 		view(0);
-		glViewportIndexedf(1, 0, (getFBO().height() / 2), getFBO().width(), (getFBO().height() / 2));
-		glViewportIndexedf(2, 0, 0, getFBO().width(), (getFBO().height() / 2));
+		glViewportIndexedf(1, 0, h / 2, w, h / 2);
+		glViewportIndexedf(2, 0, 0, w, h / 2);
 		drawFunc();
 	}
 	glerror.check("Render to FBO");
 	// Render to actual framebuffer from FBOs
-	UseTexture use(getFBO().getTexture());
+	UseTexture use(fbo.getTexture());
 	view(0);  // Viewport for drawable area
 	glDisable(GL_BLEND);
-	glmath::mat4 colorMatrix = glmath::mat4(1.0f);
+	glmath::mat4 colorMatrix = glmath::mat4();
 	updateStereo(0.0);  // Disable stereo mode while we composite
 	glerror.check("FBO->FB setup");
 	for (int num = 0; num < 2; ++num) {
@@ -268,14 +234,14 @@ void Window::render(std::function<void (void)> drawFunc) {
 		}
 		// Render FBO with 1:1 pixels, properly filtered/positioned for 3d
 		ColorTrans c(colorMatrix);
-		Dimensions dim = Dimensions(getFBO().width() / getFBO().height()).fixedWidth(1.0);
+		Dimensions dim = Dimensions(w / h).fixedWidth(1.0);
 		dim.center((num == 0 ? 0.25 : -0.25) * dim.h());
 		if (num == 1) {
 			// Right eye blends over the left eye
 			glEnable(GL_BLEND);
 			glBlendFunc(GL_ONE, GL_ONE);
 		}
-		getFBO().getTexture().draw(dim, TexCoords(0.0, 1.0, 1.0, 0));
+		fbo.getTexture().draw(dim, TexCoords(0.0, 1.0, 1.0, 0));
 	}
 }
 
@@ -316,6 +282,7 @@ void Window::view(unsigned num) {
 			glViewportIndexedf(2, 0, 0, vw, vh / 2);  // Bottom half of the drawable area
 		}
 	}
+
 }
 
 void Window::swap() {
@@ -323,16 +290,10 @@ void Window::swap() {
 }
 
 void Window::event() {
+	m_needResize = true;
 	// Update config option with any fullscreen toggles done via OS (e.g. MacOS green titlebar button)
 	bool macos = Platform::currentOS() == Platform::macos;
-	bool wasFullscreen = config["graphic/fullscreen"].b();
 	config["graphic/fullscreen"].b() = SDL_GetWindowFlags(screen) & (macos ? SDL_WINDOW_MAXIMIZED : SDL_WINDOW_FULLSCREEN_DESKTOP);
-	if (config["graphic/fullscreen"].b() != wasFullscreen) { m_needResize = true; }
-}
-
-FBO& Window::getFBO() {
-	if (!m_fbo) m_fbo = std::make_unique<FBO>(s_width, (2 * s_height));
-	return *m_fbo;
 }
 
 void Window::setFullscreen() {
@@ -380,7 +341,6 @@ void Window::resize() {
 	std::clog << "video/info: Window size " << w << "x" << h;
 	if (w != nativeW) std::clog << " (HiDPI " << nativeW << "x" << nativeH << ")";
 	std::clog << ", rendering in " << s_width << "x" << s_height << std::endl;
-	if (m_fbo) { m_fbo->resize(s_width, 2 * s_height); }
 }
 
 void Window::screenshot() {
