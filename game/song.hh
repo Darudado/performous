@@ -5,7 +5,6 @@
 #include "notes.hh"
 #include "util.hh"
 
-#include <boost/noncopyable.hpp>
 #include <stdexcept>
 #include <string>
 
