@@ -13,6 +13,7 @@ static inline float virtH() { return float(screenH()) / screenW(); }
 
 struct SDL_Surface;
 struct SDL_Window;
+class FBO;
 
 struct ColorTrans {
 	ColorTrans(Color const& c);
@@ -53,13 +54,18 @@ public:
 	void render(boost::function<void (void)> drawFunc);
 	/// clears window
 	void blank();
+	/// Initialize VAO and VBO.
+	void initBuffers();
 	/// swaps buffers
 	void swap();
 	void event();  ///< Handle window events
 	void resize();	/// Resize window (contents) / toggle full screen according to config. Returns true if resized.
 	/// take a screenshot
 	void screenshot();
-
+	
+	GLuint const& VAO() const { return m_vao; }
+	GLuint const& VBO() const { return m_vbo; }
+	
 	/// Construct a new shader or return an existing one by name
 	Shader& shader(std::string const& name) {
 		ShaderMap::iterator it = m_shaders.find(name);
@@ -75,6 +81,10 @@ public:
 	/// Check if resizing (full screen toggle) caused OpenGL context to be lost, in which case textures etc. need reloading.
 	bool needReload() { bool tmp = m_needReload; m_needReload = false; return tmp; }
 private:
+	const GLuint vertPos = 0;
+	const GLuint vertTexCoord = 1;
+	const GLuint vertNormal = 2;
+	const GLuint vertColor = 3;
 	void setFullscreen();
 	/// Setup everything for drawing a view.
 	/// @param num 0 = no stereo, 1 = left eye, 2 = right eye
@@ -83,10 +93,15 @@ private:
 	bool m_fullscreen = false;
 	bool m_needResize = true;
 	bool m_needReload = true;
+	static GLuint m_vao;
+	static GLuint m_vbo;
+	std::unique_ptr<FBO> m_fbo;
 	int m_windowX = 0;
 	int m_windowY = 0;
 	using ShaderMap = std::map<std::string, std::unique_ptr<Shader>>;
 	ShaderMap m_shaders; ///< Shader programs by name
 	SDL_Window* screen = nullptr;
+	public:
+	FBO& getFBO() { return *m_fbo; }
 };
 
