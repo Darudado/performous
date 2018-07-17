@@ -102,6 +102,6 @@ private:
 	ShaderMap m_shaders; ///< Shader programs by name
 	SDL_Window* screen = nullptr;
 	public:
-	FBO& getFBO() { return *m_fbo; }
+	FBO& getFBO();
 };
 
