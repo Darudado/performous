@@ -4,6 +4,7 @@
 #include "glshader.hh"
 #include "glutil.hh"
 #include <map>
+#include <SDL2/SDL_events.h>
 
 float screenW();
 float screenH();
@@ -57,8 +58,10 @@ public:
 	void initBuffers();
 	/// swaps buffers
 	void swap();
-	void event();  ///< Handle window events
-	void resize();	/// Resize window (contents) / toggle full screen according to config. Returns true if resized.
+	/// Handle window events
+	void event(Uint8 const& eventID);
+	/// Resize window (contents) / toggle full screen according to config. Returns true if resized.
+	void resize();
 	/// take a screenshot
 	void screenshot();
 	

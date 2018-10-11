@@ -40,9 +40,9 @@ namespace {
 	const float far_ = 110.0f; // How far away can things be seen
 	const float z0 = 1.5f; // This determines FOV: the value is your distance from the monitor (the unit being the width of the Performous window)
 
-	glmath::mat4 g_color = glmath::mat4();
-	glmath::mat4 g_projection = glmath::mat4();
-	glmath::mat4 g_modelview = glmath::mat4();
+	glmath::mat4 g_color = glmath::mat4(1.0f);
+	glmath::mat4 g_projection = glmath::mat4(1.0f);
+	glmath::mat4 g_modelview = glmath::mat4(1.0f);
 }
 
 float screenW() { return s_width; }
@@ -81,17 +81,17 @@ Window::Window() {
 	}
 	SDL_SetWindowMinimumSize(screen, 640, 360);
 	SDL_GetWindowPosition(screen, &m_windowX, &m_windowY);
-	resize();
-	SDL_ShowWindow(screen);
-
 	// Dump some OpenGL info
 	std::clog << "video/info: GL_VENDOR:     " << glGetString(GL_VENDOR) << std::endl;
 	std::clog << "video/info: GL_VERSION:    " << glGetString(GL_VERSION) << std::endl;
 	std::clog << "video/info: GL_RENDERER:   " << glGetString(GL_RENDERER) << std::endl;
 	// Extensions would need more complex outputting, otherwise they will break clog.
 	//std::clog << "video/info: GL_EXTENSIONS: " << glGetString(GL_EXTENSIONS) << std::endl;
-	if (epoxy_gl_version() < 33) throw std::runtime_error("OpenGL 3.3 is required but not available");
+	if (epoxy_gl_version() < 33) throw std::runtime_error("OpenGL 3.3 is required but not available");	
 	createShaders();
+	resize();
+	SDL_ShowWindow(screen);
+	m_fullscreen = !config["graphic/fullscreen"].b();
 }
 
 void Window::createShaders() {
@@ -105,8 +105,6 @@ void Window::createShaders() {
 		shader("texture").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("3dobject").compileFile(findFile("shaders/stereo3d.geom"));
 		shader("dancenote").compileFile(findFile("shaders/stereo3d.geom"));
-		
-// 		if (!m_fbo) { std::clog << "fbo/debug: Creating m_fbo pointer (createShaders)" << std::endl; m_fbo = std::make_unique<FBO>(s_width, 2 * s_height); }
 		}
 		else { 
 		std::clog << "video/warning: Stereo3D was enabled but the 'GL_ARB_viewport_array' extension is unsupported; will now disable Stereo3D." << std::endl;
@@ -234,8 +232,6 @@ void Window::render(std::function<void (void)> drawFunc) {
 	
 	glerror.check("FBO");
 	{
-// 		if (!m_fbo) { std::clog << "fbo/debug: Creating m_fbo pointer" << std::endl; m_fbo = std::make_unique<FBO>(s_width, 2 * s_height); }
-		getFBO();
 		UseFBO user(getFBO());
 		blank();
 		view(0);
@@ -248,7 +244,7 @@ void Window::render(std::function<void (void)> drawFunc) {
 	UseTexture use(getFBO().getTexture());
 	view(0);  // Viewport for drawable area
 	glDisable(GL_BLEND);
-	glmath::mat4 colorMatrix = glmath::mat4();
+	glmath::mat4 colorMatrix = glmath::mat4(1.0f);
 	updateStereo(0.0);  // Disable stereo mode while we composite
 	glerror.check("FBO->FB setup");
 	for (int num = 0; num < 2; ++num) {
@@ -325,11 +321,23 @@ void Window::swap() {
 	SDL_GL_SwapWindow(screen);
 }
 
-void Window::event() {
-	m_needResize = true;
-	// Update config option with any fullscreen toggles done via OS (e.g. MacOS green titlebar button)
-	bool macos = Platform::currentOS() == Platform::macos;
-	config["graphic/fullscreen"].b() = SDL_GetWindowFlags(screen) & (macos ? SDL_WINDOW_MAXIMIZED : SDL_WINDOW_FULLSCREEN_DESKTOP);
+void Window::event(Uint8 const& eventID) {
+	switch (eventID) {
+		case SDL_WINDOWEVENT_MAXIMIZED:
+			config["graphic/fullscreen"].b() = true;
+			break;	
+		case SDL_WINDOWEVENT_RESTORED:
+			config["graphic/fullscreen"].b() = false;
+			break;	
+		case SDL_WINDOWEVENT_RESIZED:
+			[[fallthrough]];
+		case SDL_WINDOWEVENT_SHOWN:
+			[[fallthrough]];
+		case SDL_WINDOWEVENT_SIZE_CHANGED:
+			m_needResize = true;
+			break;
+		default: break;
+	}	
 }
 
 FBO& Window::getFBO() {
@@ -381,7 +389,7 @@ void Window::resize() {
 	std::clog << "video/info: Window size " << w << "x" << h;
 	if (w != nativeW) std::clog << " (HiDPI " << nativeW << "x" << nativeH << ")";
 	std::clog << ", rendering in " << s_width << "x" << s_height << std::endl;
-	if (m_fbo) { std::clog << "fbo/debug: Resizing fbo" << std::endl; m_fbo->resize(s_width, 2 * s_height); }
+	if (m_fbo) { m_fbo->resize(s_width, 2 * s_height); }
 }
 
 void Window::screenshot() {
